@@ -1,0 +1,4 @@
+add_executable(test_ring_buffer
+    test_ring_buffer.cpp
+)
+target_link_libraries(test_ring_buffer instrument_core)
