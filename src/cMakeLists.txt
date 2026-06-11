@@ -3,21 +3,3 @@ add_library(instrument_core
     core/metrics.cpp
     core/snapshot.cpp
 )
-
-add_library(instrument_hooks
-    hooks/hook_manager.cpp
-)
-
-add_library(instrument_tui
-    tui/tui_app.cpp
-)
-
-add_executable(llm_instrument
-    main.cpp
-)
-
-target_link_libraries(llm_instrument
-    instrument_core
-    instrument_hooks
-    instrument_tui
-)
