@@ -4,8 +4,8 @@
 class TuiApp {
 public:
     explicit TuiApp(RingBuffer& buffer);
-    void run();   // starts the TUI render loop, blocks until user quits
-    void stop();  // signals the render loop to exit
+    void run();
+    void stop();
 
 private:
     RingBuffer& buffer_;

@@ -12,5 +12,6 @@ endif()
 add_compile_options(-Wall -Wextra)
 include_directories(include)
 
+add_subdirectory(third_party/FTXUI)
 add_subdirectory(src)
 add_subdirectory(tests)
