@@ -41,3 +41,5 @@ struct LayerSnapshot {
     static constexpr uint32_t FLAG_CUDA_FALLBACK   = 1 << 1;
     static constexpr uint32_t FLAG_SPARSITY_DROP   = 1 << 2;
 };
+
+void print_snapshot(const LayerSnapshot& snap);
