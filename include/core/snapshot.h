@@ -22,6 +22,9 @@ struct LayerSnapshot {
     LayerType     type;
     ComputeDevice device;
 
+    char          layer_name[64];   // e.g. "layers.1.attn"
+    char          model_name[64];   // e.g. "llama-3-8b"
+
     std::array<int, 4> shape;
     int           ndim;
     char          dtype[16];        // fixed array instead of std::string

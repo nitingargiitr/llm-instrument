@@ -6,7 +6,15 @@ add_library(instrument_core
 
 add_library(instrument_hooks
     hooks/hook_manager.cpp
+    hooks/model_runner.cpp
 )
+
+target_include_directories(instrument_hooks PUBLIC
+    ${CMAKE_SOURCE_DIR}/third_party/llama.cpp/include
+    ${CMAKE_SOURCE_DIR}/third_party/llama.cpp/ggml/include
+)
+
+target_link_libraries(instrument_hooks PUBLIC llama)
 
 add_library(instrument_tui
     tui/tui_app.cpp

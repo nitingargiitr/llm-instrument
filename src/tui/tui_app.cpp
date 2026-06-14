@@ -9,6 +9,8 @@
 #include <thread>
 #include <chrono>
 #include <cstring>
+#include <mutex>
+#include <unordered_set>
 
 using namespace ftxui;
 
@@ -32,6 +34,41 @@ static std::string float_str(float v, int decimals = 2) {
     return std::string(buf);
 }
 
+static Element render_attention_panel(const LayerSnapshot* sel) {
+    Elements attn_rows;
+    constexpr int kMatrixRows = 8;
+
+    if (sel && sel->attn_rows > 0 &&
+        sel->type == LayerType::Attention) {
+        for (int r = 0; r < sel->attn_rows; r++) {
+            std::string row_str;
+            row_str.reserve(sel->attn_cols);
+            for (int c = 0; c < sel->attn_cols; c++) {
+                float v = sel->attn_matrix[r][c];
+                if      (v > 0.75f) row_str += '#';
+                else if (v > 0.50f) row_str += '+';
+                else if (v > 0.25f) row_str += '-';
+                else if (v > 0.10f) row_str += '.';
+                else                row_str += ' ';
+            }
+            attn_rows.push_back(text("  " + row_str));
+        }
+        while ((int)attn_rows.size() < kMatrixRows) {
+            attn_rows.push_back(text(""));
+        }
+    } else {
+        attn_rows.push_back(
+            text("  Select an Attention layer (j/k)") | dim);
+        while ((int)attn_rows.size() < kMatrixRows) {
+            attn_rows.push_back(text(""));
+        }
+    }
+
+    return window(
+        text(" 3. ATTENTION MATRIX ") | bold,
+        vbox(attn_rows) | size(HEIGHT, EQUAL, kMatrixRows));
+}
+
 TuiApp::TuiApp(RingBuffer& buffer) : buffer_(buffer) {}
 
 void TuiApp::run() {
@@ -42,6 +79,10 @@ void TuiApp::run() {
     int menu_selected = 0;
     int focused_panel = 0;
     const int MAX_STREAM = 50;
+    constexpr int kTopologyHeight = 14;
+    constexpr int kStreamHeight     = 12;
+    constexpr int kAnomalyHeight    = 8;
+    std::mutex data_mutex;
     auto screen = ScreenInteractive::Fullscreen();
     auto layer_menu = Menu(&layer_labels, &menu_selected);
     auto main_component = CatchEvent(layer_menu, [&](Event event) {
@@ -58,7 +99,10 @@ void TuiApp::run() {
     });
     std::thread refresh_thread([&] {
         while (running_) {
+            bool updated = false;
             while (auto snap = buffer_.pop()) {
+                updated = true;
+                std::lock_guard<std::mutex> lock(data_mutex);
                 bool found = false;
                 for (auto& l : layers) {
                     if (l.layer_index == snap->layer_index &&
@@ -77,16 +121,28 @@ void TuiApp::run() {
                 if ((int)stream.size() > MAX_STREAM)
                     stream.pop_back();
             }
-            screen.PostEvent(Event::Custom);
+            if (updated) {
+                screen.PostEvent(Event::Custom);
+            }
             std::this_thread::sleep_for(
-                std::chrono::milliseconds(60));
+                std::chrono::milliseconds(100));
         }
     });
     auto renderer = Renderer(main_component, [&] {
+        std::lock_guard<std::mutex> lock(data_mutex);
+
+        LayerSnapshot selected_snap{};
+        const LayerSnapshot* sel = nullptr;
+        if (menu_selected >= 0 &&
+            menu_selected < (int)layers.size()) {
+            selected_snap = layers[menu_selected];
+            sel = &selected_snap;
+        }
         auto panel1 = window(
             text(" 1. MODEL TOPOLOGY ") | bold,
-            layer_menu->Render() | vscroll_indicator | frame
-        ) | size(WIDTH, EQUAL, 36);
+            layer_menu->Render() | vscroll_indicator | frame |
+                size(HEIGHT, EQUAL, kTopologyHeight)
+        ) | size(WIDTH, EQUAL, 36) | size(HEIGHT, EQUAL, kTopologyHeight);
 
         Elements stream_rows;
         stream_rows.push_back(hbox({
@@ -113,34 +169,11 @@ void TuiApp::run() {
         }
         auto panel2 = window(
             text(" 2. LIVE STREAM ") | bold,
-            vbox(stream_rows) | yframe) | flex;
+            vbox(stream_rows) | vscroll_indicator | frame |
+                size(HEIGHT, EQUAL, kStreamHeight)
+        ) | flex | size(HEIGHT, EQUAL, kTopologyHeight);
 
-        LayerSnapshot* sel = nullptr;
-        if (menu_selected >= 0 &&
-            menu_selected < (int)layers.size())
-            sel = &layers[menu_selected];
-        Elements attn_rows;
-        if (sel && sel->attn_rows > 0 &&
-            sel->type == LayerType::Attention) {
-            for (int r = 0; r < sel->attn_rows; r++) {
-                std::string row_str;
-                for (int c = 0; c < sel->attn_cols; c++) {
-                    float v = sel->attn_matrix[r][c];
-                    if      (v > 0.75f) row_str += "\u2588";
-                    else if (v > 0.50f) row_str += "\u2593";
-                    else if (v > 0.25f) row_str += "\u2592";
-                    else if (v > 0.10f) row_str += "\u2591";
-                    else                row_str += " ";
-                }
-                attn_rows.push_back(text(row_str));
-            }
-        } else {
-            attn_rows.push_back(
-                text("  Select an Attention layer") | dim);
-        }
-        auto panel3 = window(
-            text(" 3. ATTENTION MATRIX ") | bold,
-            vbox(attn_rows));
+        auto panel3 = render_attention_panel(sel);
 
         Elements metric_rows;
         if (sel) {
@@ -177,8 +210,11 @@ void TuiApp::run() {
             vbox(metric_rows)) | flex;
 
         Elements anomaly_rows;
+        std::unordered_set<int> shown_layers;
         for (auto& s : stream) {
             if (s.anomaly_flags == 0) continue;
+            if (!shown_layers.insert(s.layer_index).second) continue;
+
             std::string msg = "  Layer " +
                 std::to_string(s.layer_index) + ": ";
             if (s.anomaly_flags &
@@ -198,20 +234,27 @@ void TuiApp::run() {
                 text("  No anomalies") | dim);
         auto panel5 = window(
             text(" 5. ANOMALY LEDGER ") | bold,
-            vbox(anomaly_rows) | yframe) | flex;
+            vbox(anomaly_rows) | vscroll_indicator | frame |
+                size(HEIGHT, EQUAL, kAnomalyHeight)
+        ) | flex | size(HEIGHT, EQUAL, kAnomalyHeight);
 
         auto status = hbox({
-            text("  [Tab] Switch  ") | dim,
-            text("[j/k] Navigate  ") | dim,
-            text("[Q] Quit  ")        | dim,
-            text("Panel " + std::to_string(
-                focused_panel + 1)) | bold,
+            text("  [Tab] Switch panel  ") | bold,
+            text("[j/k] Select layer  ") | bold,
+            text("[Q] Quit  ") | bold,
+            filler(),
+            text("Focus: Panel " + std::to_string(
+                focused_panel + 1)) | bold | color(Color::Cyan),
         });
 
-        return vbox({
+        auto main_panels = vbox({
             hbox({ panel1, panel2 }),
             panel3,
             hbox({ panel4, panel5 }),
+        }) | flex;
+
+        return vbox({
+            main_panels,
             separator(),
             status,
         });
