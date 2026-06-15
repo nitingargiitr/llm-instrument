@@ -1,4 +1,5 @@
 #include <iostream>
+#include <fstream>
 #include <string>
 #include <thread>
 #include "core/ring_buffer.h"
@@ -11,7 +12,10 @@ static void print_usage(const char* prog) {
         << "Usage:\n"
         << "  " << prog << " [--simulate]          Run with simulated model data\n"
         << "  " << prog << " --model <path.gguf>   Run with real llama.cpp model\n"
-        << "  " << prog << " --prompt \"text\"       Prompt for model mode (optional)\n";
+        << "  " << prog << " --prompt \"text\"       Prompt text (simulate and model)\n"
+        << "\n"
+        << "Example:\n"
+        << "  " << prog << " --model ../models/SmolLM2-360M-Instruct-Q4_K_M.gguf --prompt \"Hello world\"\n";
 }
 
 int main(int argc, char** argv) {
@@ -40,6 +44,15 @@ int main(int argc, char** argv) {
         }
     }
 
+    if (!simulate) {
+        std::ifstream model_file(model_path);
+        if (!model_file.good()) {
+            std::cerr << "Error: model file not found: " << model_path << "\n";
+            std::cerr << "Download a .gguf into models/ (e.g. SmolLM2-360M-Instruct-Q4_K_M.gguf)\n";
+            return 1;
+        }
+    }
+
     RingBuffer   ring_buffer;
     HookManager  hooks(ring_buffer);
     TuiApp       tui(ring_buffer);
@@ -50,9 +63,11 @@ int main(int argc, char** argv) {
     std::thread model_thread([&] {
         if (simulate) {
             std::cout << "[main] running in simulate mode\n";
-            run_simulate(hooks, model_running);
+            run_simulate(hooks, model_running, prompt);
         } else {
             std::cout << "[main] running model: " << model_path << "\n";
+            std::cout << "[main] prompt: \"" << prompt << "\"\n";
+            std::cout << "[main] first load may take ~30s (Metal shader compile) — wait for stream data\n";
             run_model(hooks, model_path, prompt, model_running);
         }
     });

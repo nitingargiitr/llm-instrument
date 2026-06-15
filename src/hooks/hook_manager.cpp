@@ -25,6 +25,119 @@ void HookManager::set_model_name(const char* name) {
     model_name_[sizeof(model_name_) - 1] = '\0';
 }
 
+void HookManager::append_token_label(const char* label) {
+    if (!label || label[0] == '\0') return;
+    if (n_token_labels_ >= LayerSnapshot::TOKEN_LABEL_CAP) {
+        for (int i = 0; i < LayerSnapshot::TOKEN_LABEL_CAP - 1; i++) {
+            strncpy(token_labels_[i], token_labels_[i + 1],
+                    sizeof(token_labels_[i]) - 1);
+            token_labels_[i][sizeof(token_labels_[i]) - 1] = '\0';
+        }
+        n_token_labels_ = LayerSnapshot::TOKEN_LABEL_CAP - 1;
+    }
+    strncpy(token_labels_[n_token_labels_], label,
+            sizeof(token_labels_[n_token_labels_]) - 1);
+    token_labels_[n_token_labels_][sizeof(token_labels_[n_token_labels_]) - 1] =
+        '\0';
+    n_token_labels_++;
+}
+
+void HookManager::set_attn_weights(int layer_index, int head,
+                                   const float weights[][LayerSnapshot::ATTN_CAP],
+                                   int rows, int cols,
+                                   int n_context_tokens,
+                                   const int* weight_shape,
+                                   int weight_ndim) {
+    if (layer_index < 0 || layer_index >= kMaxTrackedLayers) return;
+    if (rows <= 0 || cols <= 0) return;
+
+    auto& cache = attn_weights_[layer_index];
+    cache.head        = head;
+    cache.n_context   = n_context_tokens;
+    cache.weight_ndim = weight_ndim;
+    for (int d = 0; d < 4; d++) {
+        cache.weight_shape[d] = (weight_shape && d < weight_ndim)
+            ? weight_shape[d] : 0;
+    }
+
+    if (rows > 1) {
+        cache.rows = std::min(rows, LayerSnapshot::ATTN_CAP);
+        cache.cols = std::min(cols, LayerSnapshot::ATTN_CAP);
+        for (int r = 0; r < cache.rows; r++) {
+            for (int c = 0; c < cache.cols; c++) {
+                cache.matrix[r][c] = weights[r][c];
+            }
+        }
+    } else {
+        const int cap = LayerSnapshot::ATTN_CAP;
+        const int win_cols = std::min(cols, cap);
+        const int win_rows = std::min(n_context_tokens, cap);
+        const int kv_start = n_context_tokens - cols;
+
+        if (cache.valid && cache.rows > 0 && cache.cols > 0) {
+            if (cache.rows >= cap && n_context_tokens > cache.n_context) {
+                for (int r = 0; r < cap - 1; r++) {
+                    for (int c = 0; c < cache.cols; c++) {
+                        cache.matrix[r][c] = cache.matrix[r + 1][c];
+                    }
+                }
+                cache.rows = cap;
+            } else {
+                cache.rows = std::min(std::max(cache.rows, win_rows), cap);
+            }
+            cache.cols = std::min(std::max(cache.cols, win_cols), cap);
+
+            const int q_abs   = n_context_tokens - 1;
+            const int row_base = n_context_tokens - cache.rows;
+            const int col_base = n_context_tokens - cache.cols;
+            const int local_r  = q_abs - row_base;
+
+            if (local_r >= 0 && local_r < cache.rows) {
+                for (int c = 0; c < cols; c++) {
+                    const int abs_key = kv_start + c;
+                    const int local_c = abs_key - col_base;
+                    if (local_c >= 0 && local_c < cache.cols) {
+                        cache.matrix[local_r][local_c] = weights[0][c];
+                    }
+                }
+            }
+        } else {
+            cache.rows = 1;
+            cache.cols = win_cols;
+            for (int c = 0; c < cache.cols; c++) {
+                cache.matrix[0][c] = weights[0][c];
+            }
+        }
+    }
+
+    cache.label_offset = std::max(0, n_token_labels_ - cache.cols);
+    cache.row_offset   = std::max(0, n_token_labels_ - cache.rows);
+    cache.valid = cache.rows > 0 && cache.cols > 0;
+}
+
+void HookManager::reset_attn_caches() {
+    for (auto& cache : attn_weights_) {
+        cache = {};
+    }
+}
+
+void HookManager::set_decode_step(int step) {
+    decode_step_ = step < 0 ? 0 : step;
+}
+
+void HookManager::set_token_labels(const char labels[][16], int count) {
+    n_token_labels_ = 0;
+    if (!labels || count <= 0) return;
+    n_token_labels_ = count;
+    if (n_token_labels_ > LayerSnapshot::TOKEN_LABEL_CAP) {
+        n_token_labels_ = LayerSnapshot::TOKEN_LABEL_CAP;
+    }
+    for (int i = 0; i < n_token_labels_; i++) {
+        strncpy(token_labels_[i], labels[i], sizeof(token_labels_[i]) - 1);
+        token_labels_[i][sizeof(token_labels_[i]) - 1] = '\0';
+    }
+}
+
 void HookManager::install() {
     if (installed_) return;
     installed_ = true;
@@ -58,6 +171,7 @@ void HookManager::capture_layer(int layer_index, LayerType type,
     memset(&snap, 0, sizeof(snap));
 
     snap.sequence_id  = global_seq++;
+    snap.decode_step  = decode_step_;
     snap.timestamp_us = now_us();
     snap.layer_index  = layer_index;
     snap.type         = type;
@@ -118,19 +232,30 @@ void HookManager::capture_layer(int layer_index, LayerType type,
         prev.seen = true;
     }
 
-    if (type == LayerType::Attention && count >= 64) {
-        snap.attn_rows = 8;
-        snap.attn_cols = 8;
-        float local_max = 0.0f;
-        for (int i = 0; i < 64; i++) {
-            float av = data[i] < 0 ? -data[i] : data[i];
-            if (av > local_max) local_max = av;
+    snap.n_token_labels = n_token_labels_;
+    for (int i = 0; i < n_token_labels_; i++) {
+        strncpy(snap.token_labels[i], token_labels_[i],
+                sizeof(snap.token_labels[i]) - 1);
+        snap.token_labels[i][sizeof(snap.token_labels[i]) - 1] = '\0';
+    }
+
+    if (type == LayerType::Attention &&
+        layer_index >= 0 && layer_index < kMaxTrackedLayers &&
+        attn_weights_[layer_index].valid) {
+        const auto& w = attn_weights_[layer_index];
+        snap.attn_rows = w.rows;
+        snap.attn_cols = w.cols;
+        snap.attn_head = w.head;
+        snap.attn_label_offset = w.label_offset;
+        snap.attn_row_offset   = w.row_offset;
+        snap.n_context_tokens  = w.n_context;
+        snap.attn_weight_ndim = w.weight_ndim;
+        for (int d = 0; d < 4; d++) {
+            snap.attn_weight_shape[d] = w.weight_shape[d];
         }
-        if (local_max < 1e-6f) local_max = 1.0f;
-        for (int r = 0; r < 8; r++) {
-            for (int c = 0; c < 8; c++) {
-                float v = data[r * 8 + c];
-                snap.attn_matrix[r][c] = (v < 0 ? -v : v) / local_max;
+        for (int r = 0; r < w.rows && r < LayerSnapshot::ATTN_CAP; r++) {
+            for (int c = 0; c < w.cols && c < LayerSnapshot::ATTN_CAP; c++) {
+                snap.attn_matrix[r][c] = w.matrix[r][c];
             }
         }
     }

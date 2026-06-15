@@ -17,6 +17,7 @@ bool RingBuffer::push(const LayerSnapshot& snap) {
 
     if (next_head == tail_.load(std::memory_order_acquire)) {
         tail_.fetch_add(1, std::memory_order_release);
+        drops_.fetch_add(1, std::memory_order_relaxed);
     }
 
     buffer_[head] = snap;
@@ -41,4 +42,8 @@ uint32_t RingBuffer::available() const {
     uint32_t h = head_.load(std::memory_order_acquire);
     uint32_t t = tail_.load(std::memory_order_acquire);
     return (h - t) & (RING_BUFFER_SIZE - 1);
+}
+
+uint64_t RingBuffer::dropped_count() const {
+    return drops_.load(std::memory_order_acquire);
 }

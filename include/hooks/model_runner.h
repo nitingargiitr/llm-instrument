@@ -10,4 +10,5 @@ void run_model(HookManager& hooks,
                bool& running);
 
 // Simulated model loop (development / fallback when no model file).
-void run_simulate(HookManager& hooks, bool& running);
+void run_simulate(HookManager& hooks, bool& running,
+                  const std::string& prompt = "Hello");

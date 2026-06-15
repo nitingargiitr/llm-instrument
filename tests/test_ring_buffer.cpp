@@ -44,13 +44,15 @@ int main() {
         std::cout << "PASS: FIFO order preserved" << std::endl;
     }
 
-    // Test 4: overfill does not crash
+    // Test 4: overfill increments drop counter
     {
         RingBuffer rb;
         LayerSnapshot s;
         memset(&s, 0, sizeof(s));
-        for (int i = 0; i < 20; i++) rb.push(s);
-        std::cout << "PASS: overfill does not crash" << std::endl;
+        for (int i = 0; i < 300; i++) rb.push(s);
+        assert(rb.dropped_count() > 0);
+        std::cout << "PASS: overfill tracks drops (" << rb.dropped_count()
+                  << ")" << std::endl;
     }
 
     // Test 5: available() count

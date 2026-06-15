@@ -41,6 +41,7 @@ uint32_t detect_anomalies(float max_abs, float sparsity,
 
     if (device == ComputeDevice::CPU &&
         (prev_device == ComputeDevice::CUDA ||
+         prev_device == ComputeDevice::Metal ||
          type == LayerType::LayerNorm)) {
         flags |= LayerSnapshot::FLAG_CUDA_FALLBACK;
     }

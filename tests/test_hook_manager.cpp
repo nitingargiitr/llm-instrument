@@ -4,7 +4,9 @@
 
 #include <cassert>
 #include <cmath>
+#include <cstdio>
 #include <iostream>
+#include <string>
 
 int main() {
     std::cout << "Starting hook manager tests...\n";
@@ -84,6 +86,53 @@ int main() {
 
     assert(saw_sparsity_drop);
     std::cout << "PASS: sparsity drop detected\n";
+
+    char labels[2][16] = {};
+    std::snprintf(labels[0], sizeof(labels[0]), "Hello");
+    std::snprintf(labels[1], sizeof(labels[1]), "world");
+    hooks.set_token_labels(labels, 2);
+    hooks.append_token_label("!");
+    hooks.capture_layer(7, LayerType::Attention, ComputeDevice::CUDA,
+                        dense_data, 128, 1.0f);
+    if (auto snap = ring_buffer.pop()) {
+        assert(snap->n_token_labels == 3);
+        assert(std::string(snap->token_labels[0]) == "Hello");
+        assert(std::string(snap->token_labels[1]) == "world");
+        assert(std::string(snap->token_labels[2]) == "!");
+        std::cout << "PASS: token labels attached to snapshot\n";
+    }
+
+    float weights[LayerSnapshot::ATTN_CAP][LayerSnapshot::ATTN_CAP]{};
+    for (int r = 0; r < 8; r++) {
+        for (int c = 0; c < 8; c++) {
+            weights[r][c] = (r == c) ? 0.5f : 0.05f;
+        }
+    }
+    int wshape[4] = {8, 8, 1, 1};
+    hooks.set_attn_weights(7, 0, weights, 8, 8, 8, wshape, 4);
+    hooks.capture_layer(7, LayerType::Attention, ComputeDevice::CUDA,
+                        dense_data, 128, 1.0f);
+    if (auto snap = ring_buffer.pop()) {
+        assert(snap->attn_rows == 8);
+        assert(snap->attn_cols == 8);
+        assert(snap->attn_matrix[0][0] > 0.4f);
+        std::cout << "PASS: attention weights merged into snapshot\n";
+    }
+
+    float row[LayerSnapshot::ATTN_CAP][LayerSnapshot::ATTN_CAP]{};
+    for (int c = 0; c < 9; c++) {
+        row[0][c] = 0.1f * static_cast<float>(c + 1);
+    }
+    hooks.set_attn_weights(7, 0, row, 1, 9, 9, wshape, 4);
+    hooks.capture_layer(7, LayerType::Attention, ComputeDevice::CUDA,
+                        dense_data, 128, 1.0f, "layers.7.attn");
+    if (auto snap = ring_buffer.pop()) {
+        assert(snap->attn_rows == 9);
+        assert(snap->attn_cols == 9);
+        assert(snap->attn_matrix[7][7] > 0.4f);
+        assert(snap->attn_matrix[8][8] > 0.8f);
+        std::cout << "PASS: single-token row merged into attention grid\n";
+    }
 
     hooks.uninstall();
     std::cout << "\nAll hook manager tests passed.\n";
