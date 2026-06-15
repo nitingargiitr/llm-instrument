@@ -36,7 +36,7 @@ Many existing tools overlap partially with what LLM-Instrument does, but few com
 | Panel | Contents |
 |-------|----------|
 | **1. Model topology** | Tree of layers; set **capture target** with Space |
-| **2. Live stream** | Timestamped events: layer, type, device, decode step |
+| **2. Live stream** | Timestamped events for all layers; capture target highlighted |
 | **3. Attention weights** | ASCII softmax heatmap with BPE token labels; pan & fullscreen |
 | **4. Runtime metrics** | Shape (activation), dtype, latency (op time), mean, max; **Sparsity (activations)** and **Sparsity (attn weights)** on attention layers |
 | **5. Anomaly ledger** | High activation, device fallback, sparsity shift flags |
@@ -109,16 +109,16 @@ Fastest way to verify the TUI and hook pipeline:
 ./build/src/llm_instrument --simulate --prompt "Hello world"
 ```
 
-### Option B — Real GGUF model (recommended demo)
+### Option B — Real GGUF model
 
-1. Download a small instruct model, e.g. [SmolLM2-360M-Instruct Q4_K_M](https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct-GGUF), into `models/`:
+Download a small instruct model, e.g. [SmolLM2-360M-Instruct Q4_K_M](https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct-GGUF), into `models/`:
 
 ```bash
 mkdir -p models
 # place SmolLM2-360M-Instruct-Q4_K_M.gguf in models/
 ```
 
-2. Run:
+Run:
 
 ```bash
 ./build/src/llm_instrument \
@@ -128,7 +128,7 @@ mkdir -p models
 
 **First launch on macOS** may take ~30 seconds while Metal shaders compile; wait until the live stream populates.
 
-3. Press **`q`** to quit.
+Press **`q`** to quit.
 
 ### CLI reference
 
@@ -153,14 +153,14 @@ Environment:
 |-----|---------|--------|
 | `Tab` | Global | Cycle focused panel (1→5) |
 | `j` / `k` | Topology | Move layer cursor |
-| `Space` | Topology | Set **capture target** (panels 3–5 filter to this layer) |
+| `Space` | Topology | Set **capture target** (panels 3–5 show this layer; stream highlights it) |
 | `j` / `k` | Stream / Anomalies | Scroll |
 | `h` `j` `k` `l` | Matrix | Pan attention window |
 | `F` | Matrix | Toggle fullscreen |
 | `+` / `-` | Matrix | Contrast threshold |
 | `q` | Global | Quit |
 
-**Tip for reviewers:** select an **`attn`** layer (e.g. `layers.0.attn`), not `attn_norm`, then press **Space** to see the attention heatmap in panel 3.
+**Tip:** select an **`attn`** layer (e.g. `layers.0.attn`), not `attn_norm`, then press **Space** to see the attention heatmap in panel 3.
 
 ---
 
@@ -176,13 +176,13 @@ llama_decode()
 ```
 
 - **Thread-safe**: mutex between refresh thread and renderer  
-- **Capture target**: metrics, matrix, and anomaly ledger focus on the layer chosen in topology  
+- **Capture target**: metrics, matrix, and anomaly ledger use the layer chosen in topology; stream highlights it
 
 ---
 
 ## Assumptions & limitations
 
-These are intentional trade-offs for a lightweight student / demo tool:
+These are intentional trade-offs for a lightweight demo tool:
 
 | Topic | Assumption |
 |-------|------------|
